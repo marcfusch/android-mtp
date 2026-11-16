@@ -23,6 +23,10 @@ type androidNode struct {
 	write     bool
 	start     time.Time
 	byteCount int64
+
+	// devSize is the size of the object on the device during an edit. Size runs ahead of it
+	// while writes wait in an androidFile buffer.
+	devSize int64
 }
 
 func (n *androidNode) startEdit() bool {
@@ -32,6 +36,7 @@ func (n *androidNode) startEdit() bool {
 
 	n.start = time.Now()
 	n.byteCount = 0
+	n.devSize = n.Size
 	if err := n.fs.dev.AndroidBeginEditObject(n.Handle()); err != nil {
 		log.Println("AndroidBeginEditObject failed:", err)
 		return false
@@ -83,6 +88,7 @@ func (n *androidNode) Setattr(ctx context.Context, file fs.FileHandle, in *fuse.
 			return syscall.EIO
 		}
 		n.Size = int64(size)
+		n.devSize = int64(size)
 
 		if !w {
 			if !n.endEdit() {
@@ -112,7 +118,26 @@ func (f *androidFile) flushPending() syscall.Errno {
 	if len(f.pending) == 0 {
 		return 0
 	}
-	err := f.node.fs.dev.AndroidSendPartialObject(f.node.Handle(), f.pendingOff, uint32(len(f.pending)), bytes.NewBuffer(f.pending))
+	n := f.node
+	if !n.startEdit() {
+		return syscall.EIO
+	}
+	// Android refuses a partial write that starts past the end of the object, and does so
+	// without reading its data, which leaves the transfer hanging until the device is
+	// unplugged. macOS can deliver the end of a large file first, so grow the object to the
+	// write offset beforehand; the earlier writes fill the gap when they arrive.
+	if f.pendingOff > n.devSize {
+		if err := n.fs.dev.AndroidTruncate(n.Handle(), f.pendingOff); err != nil {
+			log.Println("AndroidTruncate failed:", err)
+			f.pending = f.pending[:0]
+			return syscall.EIO
+		}
+		n.devSize = f.pendingOff
+	}
+	err := n.fs.dev.AndroidSendPartialObject(n.Handle(), f.pendingOff, uint32(len(f.pending)), bytes.NewBuffer(f.pending))
+	if end := f.pendingOff + int64(len(f.pending)); err == nil && end > n.devSize {
+		n.devSize = end
+	}
 	f.pending = f.pending[:0]
 	if err != nil {
 		log.Println("AndroidSendPartialObject failed:", err)
@@ -188,4 +213,24 @@ func (f *androidFile) Flush(ctx context.Context) syscall.Errno {
 		return syscall.EIO
 	}
 	return 0
+}
+
+var _ = (fs.FileFsyncer)((*androidFile)(nil))
+
+func (f *androidFile) Fsync(ctx context.Context, flags uint32) syscall.Errno {
+	return f.flushPending()
+}
+
+var _ = (fs.FileReleaser)((*androidFile)(nil))
+
+// Release sends writes that macOS delivered after the last Flush, which would otherwise be lost.
+func (f *androidFile) Release(ctx context.Context) syscall.Errno {
+	if len(f.pending) == 0 {
+		return 0
+	}
+	errno := f.flushPending()
+	if !f.node.endEdit() && errno == 0 {
+		errno = syscall.EIO
+	}
+	return errno
 }
