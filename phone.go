@@ -13,9 +13,18 @@ import (
 	"github.com/hanwen/usb"
 )
 
-// Délai de chaque transfert USB, en millisecondes. Court, pour qu'un téléphone verrouillé ou
-// figé renvoie une erreur au lieu de bloquer.
-const usbTimeout = 3000
+// Délais de chaque transfert USB, en millisecondes. À la connexion, court, pour qu'un téléphone
+// verrouillé renvoie une erreur au lieu de bloquer. Une fois connecté, long : un transfert qui
+// expire en plein envoi fige le téléphone jusqu'au débranchement, et le téléphone peut mettre
+// plusieurs secondes à répondre quand il indexe ses médias.
+const (
+	connectTimeout = 3000
+	ioTimeout      = 30000
+)
+
+// Taille maximale d'une écriture FUSE, le plafond de macOS. Chaque écriture coûte un échange
+// MTP complet : 128 Kio par défaut, c'est 8 fois plus d'échanges.
+const maxWrite = 1 << 20
 
 var errLocked = errors.New("le téléphone ne répond pas, déverrouille le")
 
@@ -46,10 +55,12 @@ func mountPhone(ctx *usb.Context, dir string) (*phone, error) {
 		return nil, err
 	}
 
-	dev.Timeout = usbTimeout
+	dev.Timeout = connectTimeout
+	dev.MTPDebug = os.Getenv("ANDROID_MTP_DEBUG") != ""
 	if err := dev.Configure(); err != nil {
 		return fail(fmt.Errorf("%w (%v)", errLocked, err))
 	}
+	dev.Timeout = ioTimeout
 	sids, err := fs.SelectStorages(dev, "")
 	if err != nil {
 		return fail(err)
@@ -66,19 +77,26 @@ func mountPhone(ctx *usb.Context, dir string) (*phone, error) {
 		return fail(err)
 	}
 	sec := time.Second
-	server, err := fusefs.Mount(dir, root, &fusefs.Options{
+	opts := &fusefs.Options{
 		MountOptions: fuse.MountOptions{
 			SingleThreaded: true,
+			MaxWrite:       maxWrite,
+			Debug:          os.Getenv("ANDROID_MTP_DEBUG") != "",
 			FsName:         "android",
 			Name:           "mtp",
-			Options:        []string{"volname=Android", "local", "noappledouble", "noapplexattr"},
+			Options:        []string{"volname=Android", "local", "noappledouble"},
 		},
 		UID:          uint32(os.Getuid()),
 		GID:          uint32(os.Getgid()),
 		AttrTimeout:  &sec,
 		EntryTimeout: &sec,
-	})
+	}
+	server, err := fuse.NewServer(macRawFS{fusefs.NewNodeFS(root, opts)}, dir, &opts.MountOptions)
 	if err != nil {
+		return fail(err)
+	}
+	go server.Serve()
+	if err := server.WaitMount(); err != nil {
 		return fail(err)
 	}
 

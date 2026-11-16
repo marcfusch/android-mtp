@@ -69,11 +69,13 @@ func (t *tracker) remount() {
 }
 
 // watch monte le téléphone à chaque branchement et le démonte au débranchement. SIGUSR1 remonte
-// un téléphone éjecté.
+// un téléphone éjecté ; SIGTERM, envoyé par launchd, démonte et ferme la session avant de quitter.
 func watch(dir string) {
 	ctx := usb.NewContext()
 	remount := make(chan os.Signal, 1)
 	signal.Notify(remount, syscall.SIGUSR1)
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 	tick := time.NewTicker(2 * time.Second)
 
 	if isMounted(dir) {
@@ -117,6 +119,11 @@ func watch(dir string) {
 		case <-tick.C:
 		case <-remount:
 			t.remount()
+		case <-stop:
+			if cur != nil {
+				cur.unmount(dir)
+			}
+			return
 		}
 	}
 }

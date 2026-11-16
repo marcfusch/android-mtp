@@ -33,16 +33,25 @@ git clone https://github.com/marcfusch/android-mtp ~/Documents/git/android-mtp
 | `usb.go` | l'état de l'interface MTP lu dans IOKit |
 | `ptpcamerad.go` | la mise à l'écart de Transfert d'images |
 | `mounts.go` | la table des montages |
+| `rawfs.go` | l'adaptation à macOS : noms Unicode et attributs étendus |
 | `launchd.go` | l'installation de l'agent |
 
-Le protocole MTP et le système de fichiers viennent de [go-mtpfs](https://github.com/hanwen/go-mtpfs), la même base qu'OpenMTP. Chaque transfert USB a un délai de 3 s : un téléphone qui ne répond pas renvoie une erreur au lieu de bloquer. À l'ouverture, une session restée ouverte est refermée, et l'USB est réinitialisé si besoin.
+Le protocole MTP et le système de fichiers viennent de [go-mtpfs](https://github.com/hanwen/go-mtpfs) v1.0.1, la même base qu'OpenMTP, copié dans `third_party/go-mtpfs` avec ces correctifs :
 
-Couper un programme au milieu d'un échange MTP fige le téléphone jusqu'au prochain débranchement. L'agent ne tue donc jamais de session en cours : il démonte proprement et réessaie toutes les 2 s tant que le téléphone ne répond pas.
+| Correctif | Effet |
+| :-- | :-- |
+| attente de 10 ms au lieu du délai complet pour le paquet USB vide envoyé après chaque envoi | création d'un fichier en 0,02 s au lieu de 6 s |
+| écritures consécutives regroupées en envois de 1 Mio, transferts USB de 256 Kio | environ 28 Mo/s au lieu de 4, le plafond de l'USB 2 |
+| dates lues dans le fuseau local, celui qu'envoie Android | plus de décalage horaire sur les fichiers |
+
+macOS passe les noms en Unicode décomposé alors que le téléphone les garde précomposés : `rawfs.go` les convertit, sinon tout nom accentué est introuvable. Il accepte aussi les attributs étendus sans les garder, car MTP n'en a pas et le Finder abandonne une copie s'il ne peut pas les écrire.
+
+À la connexion, chaque transfert USB a un délai de 3 s : un téléphone verrouillé renvoie une erreur au lieu de bloquer. Une session restée ouverte est refermée, et l'USB est réinitialisé si besoin. Une fois connecté, le délai passe à 30 s, car un transfert qui expire en plein envoi fige le téléphone jusqu'au prochain débranchement. Pour la même raison, l'agent ne tue jamais de session en cours : il démonte proprement, y compris quand launchd l'arrête, et réessaie toutes les 2 s tant que le téléphone ne répond pas.
 
 macOS lance `ptpcamerad` (Transfert d'images) au branchement : il prend le téléphone pour lui seul et ne le rend jamais. launchd le relance aussitôt tué, même désactivé. L'agent le gèle avec SIGSTOP : il reste en place sans rien prendre. S'il tient déjà le téléphone, l'agent doit le tuer et demande de rebrancher. Transfert d'images ne voit plus d'appareil photo tant que l'agent tourne ; `android uninstall` le libère.
 
 ## Tests
 
 ```sh
-PKG_CONFIG_PATH=$(brew --prefix libusb)/lib/pkgconfig go test ./...
+PKG_CONFIG_PATH=$(brew --prefix libusb)/lib/pkgconfig go test ./... github.com/hanwen/go-mtpfs/...
 ```
