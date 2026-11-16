@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -138,6 +139,12 @@ func failureMessage(err error, killed bool) string {
 	return err.Error()
 }
 
+// notify affiche une notification sans attendre : osascript peut ne jamais rendre la main, et la
+// boucle de watch ne doit pas l'attendre.
 func notify(msg string) {
-	exec.Command("osascript", "-e", fmt.Sprintf("display notification %q with title \"Android\"", msg)).Run()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		exec.CommandContext(ctx, "osascript", "-e", fmt.Sprintf("display notification %q with title \"Android\"", msg)).Run()
+	}()
 }

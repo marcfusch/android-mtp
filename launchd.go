@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"text/template"
+	"time"
 )
 
 const label = "local.android-mtp"
@@ -72,7 +73,7 @@ func install(home string) error {
 		return err
 	}
 
-	launchctl("bootout", domain()+"/"+a.Label)
+	stopAgent(a.Label)
 	if self != a.Bin {
 		if err := copyExecutable(self, a.Bin); err != nil {
 			return err
@@ -97,7 +98,7 @@ func install(home string) error {
 
 func uninstall(home, dir string) error {
 	a := newAgent(home)
-	launchctl("bootout", domain()+"/"+a.Label)
+	stopAgent(a.Label)
 	if isMounted(dir) {
 		forceUnmount(dir)
 	}
@@ -114,6 +115,20 @@ func uninstall(home, dir string) error {
 // signalAgent demande à l'agent de remonter un téléphone éjecté.
 func signalAgent() error {
 	return launchctl("kill", "SIGUSR1", domain()+"/"+label)
+}
+
+// stopAgent décharge l'agent et attend qu'il ait quitté : bootout rend la main avant, pendant
+// que l'agent démonte et ferme la session, et un bootstrap lancé entre temps est refusé.
+func stopAgent(label string) {
+	target := domain() + "/" + label
+	if launchctl("bootout", target) != nil {
+		return
+	}
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+		if launchctl("print", target) != nil {
+			return
+		}
+	}
 }
 
 func domain() string {

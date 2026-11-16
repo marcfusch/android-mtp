@@ -424,6 +424,7 @@ const zlpTimeout = 10
 // bulkWrite returns the number of non-header bytes written.
 func (d *Device) bulkWrite(hdr *usbBulkHeader, r io.Reader, size int64) (n int64, err error) {
 	packetSize := d.sendMaxPacketSize()
+	var sent int64
 	if hdr != nil {
 		if size+usbHdrLen > 0xFFFFFFFF {
 			hdr.Length = 0xFFFFFFFF
@@ -445,10 +446,12 @@ func (d *Device) bulkWrite(hdr *usbBulkHeader, r io.Reader, size int64) (n int64
 
 		_, err = io.CopyN(buf, r, cpSize)
 		d.dataPrint(d.sendEP, buf.Bytes())
-		_, err = d.h.BulkTransfer(d.sendEP, buf.Bytes(), d.Timeout)
+		var m int
+		m, err = d.h.BulkTransfer(d.sendEP, buf.Bytes(), d.Timeout)
 		if err != nil {
 			return cpSize, err
 		}
+		sent += int64(m)
 		size -= cpSize
 		n += cpSize
 	}
@@ -471,18 +474,28 @@ func (d *Device) bulkWrite(hdr *usbBulkHeader, r io.Reader, size int64) (n int64
 		d.dataPrint(d.sendEP, buf[:m])
 		lastTransfer, err = d.h.BulkTransfer(d.sendEP, buf[:m], d.Timeout)
 		n += int64(lastTransfer)
+		sent += int64(lastTransfer)
 
 		if err != nil || lastTransfer == 0 {
 			break
 		}
 	}
 	if lastTransfer%packetSize == 0 {
-		// write a short packet just to be sure. Android leaves it unread when the transfer
-		// already ended on a short packet, so waiting the full timeout costs seconds per object.
-		d.h.BulkTransfer(d.sendEP, buf[:0], zlpTimeout)
+		// write a short packet just to be sure. When the transfer filled its last packet, this
+		// packet ends it and the device must read it, so it gets the full timeout. Otherwise
+		// Android leaves it unread, and the full timeout would cost seconds per object.
+		timeout := zlpTimeout
+		if endsOnFullPacket(sent, packetSize) {
+			timeout = d.Timeout
+		}
+		d.h.BulkTransfer(d.sendEP, buf[:0], timeout)
 	}
 
 	return n, err
+}
+
+func endsOnFullPacket(sent int64, packetSize int) bool {
+	return sent > 0 && sent%int64(packetSize) == 0
 }
 
 func (d *Device) bulkRead(w io.Writer) (n int64, lastPacket []byte, err error) {

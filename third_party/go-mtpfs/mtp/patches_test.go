@@ -7,6 +7,25 @@ import (
 	"time"
 )
 
+func TestEndsOnFullPacket(t *testing.T) {
+	for _, tt := range []struct {
+		sent int64
+		want bool
+	}{
+		{0, false},
+		{12, false},
+		{511, false},
+		{512, true},
+		{12 + 500, true},
+		{12 + 1<<20, false},
+		{12 + 1<<20 + 500, true},
+	} {
+		if got := endsOnFullPacket(tt.sent, 512); got != tt.want {
+			t.Errorf("endsOnFullPacket(%d) = %v, want %v", tt.sent, got, tt.want)
+		}
+	}
+}
+
 func decodeTimeString(t *testing.T, s string) time.Time {
 	t.Helper()
 	enc, err := encodeStr(make([]byte, 2*len(s)+3), s)
