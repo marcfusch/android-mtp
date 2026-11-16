@@ -24,8 +24,7 @@ type androidNode struct {
 	start     time.Time
 	byteCount int64
 
-	// devSize is the size of the object on the device. Size runs ahead of it while writes
-	// wait in an androidFile buffer, so it is only changed by what reaches the device.
+	// devSize is the object size on the device; Size runs ahead of it while writes are buffered.
 	devSize int64
 }
 
@@ -100,8 +99,7 @@ func (n *androidNode) Setattr(ctx context.Context, file fs.FileHandle, in *fuse.
 
 var _ = mtpNode((*androidNode)(nil))
 
-// writeBufSize is the largest partial object sent in one transaction. Every transaction has a
-// fixed cost, so consecutive small writes are gathered up to this size before being sent.
+// writeBufSize is how much consecutive writing is gathered into one transaction.
 const writeBufSize = 1 << 20
 
 type androidFile struct {
@@ -112,9 +110,8 @@ type androidFile struct {
 	pending    []byte
 	pendingOff int64
 
-	// wrote is set once this handle has written. Only a writer ends the edit on Flush: macOS
-	// opens a file being copied to read it, for thumbnails or Spotlight, and closing that reader
-	// must not end the copy's edit.
+	// Only a handle that wrote ends the edit: macOS reads files being copied, for thumbnails or
+	// Spotlight, and closing such a reader must not end the copy's edit.
 	wrote bool
 }
 
@@ -122,33 +119,27 @@ func (f *androidFile) flushPending() syscall.Errno {
 	if len(f.pending) == 0 {
 		return 0
 	}
+	off, data := f.pendingOff, f.pending
+	f.pending = f.pending[:0]
+
 	n := f.node
 	if !n.startEdit() {
 		return syscall.EIO
 	}
-	// Android refuses a partial write that starts past the end of the object, and does so
-	// without reading its data, which leaves the transfer hanging until the device is
-	// unplugged. macOS can deliver the end of a large file first, so grow the object to the
-	// write offset beforehand; the earlier writes fill the gap when they arrive.
-	if f.pendingOff > n.devSize {
-		if err := n.fs.dev.AndroidTruncate(n.Handle(), f.pendingOff); err != nil {
+	// Android refuses a write past the end of the object without reading its data, which hangs
+	// the device. macOS can deliver the end of a large file first, so grow the object first.
+	if off > n.devSize {
+		if err := n.fs.dev.AndroidTruncate(n.Handle(), off); err != nil {
 			log.Println("AndroidTruncate failed:", err)
-			f.pending = f.pending[:0]
 			return syscall.EIO
 		}
-		n.devSize = f.pendingOff
+		n.devSize = off
 	}
-	err := n.fs.dev.AndroidSendPartialObject(n.Handle(), f.pendingOff, uint32(len(f.pending)), bytes.NewBuffer(f.pending))
-	if end := f.pendingOff + int64(len(f.pending)); err == nil && end > n.devSize {
-		n.devSize = end
-	}
-	if err != nil {
-		log.Printf("AndroidSendPartialObject %q at %d+%d, device size %d, edit open %v: %v",
-			n.obj.Filename, f.pendingOff, len(f.pending), n.devSize, n.write, err)
-		f.pending = f.pending[:0]
+	if err := n.fs.dev.AndroidSendPartialObject(n.Handle(), off, uint32(len(data)), bytes.NewBuffer(data)); err != nil {
+		log.Printf("AndroidSendPartialObject %q at %d+%d, device size %d: %v", n.obj.Filename, off, len(data), n.devSize, err)
 		return syscall.EIO
 	}
-	f.pending = f.pending[:0]
+	n.devSize = max(n.devSize, off+int64(len(data)))
 	return 0
 }
 
@@ -233,7 +224,7 @@ func (f *androidFile) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 
 var _ = (fs.FileReleaser)((*androidFile)(nil))
 
-// Release sends writes that macOS delivered after the last Flush, which would otherwise be lost.
+// Release sends writes that arrived after the last Flush.
 func (f *androidFile) Release(ctx context.Context) syscall.Errno {
 	if len(f.pending) == 0 {
 		return 0

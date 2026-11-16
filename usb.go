@@ -12,11 +12,10 @@ var (
 	ownerRe = regexp.MustCompile(`"UsbExclusiveOwner" = "pid (\d+), ([^"]+)"`)
 )
 
-// usbStatus décrit l'interface MTP du téléphone telle que la voit IOKit.
 type usbStatus struct {
-	iface    string // identifiant IOKit, nouveau à chaque énumération, vide sans téléphone
+	iface    string // identifiant IOKit, nouveau à chaque branchement, vide sans téléphone
 	ownerPID int
-	owner    string // processus qui tient l'interface en exclusivité
+	owner    string
 }
 
 func readUSB() usbStatus {
@@ -27,8 +26,6 @@ func readUSB() usbStatus {
 	return parseIoreg(string(out))
 }
 
-// parseIoreg lit la sortie de ioreg -r -c IOUSBHostInterface -l, où chaque interface commence
-// par +-o en début de ligne.
 func parseIoreg(out string) usbStatus {
 	for _, block := range strings.Split("\n"+out, "\n+-o ") {
 		m := ifaceRe.FindStringSubmatch(block)

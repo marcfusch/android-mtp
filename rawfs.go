@@ -5,11 +5,9 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// macRawFS adapte le système de fichiers de go-mtpfs aux habitudes de macOS :
-//   - macOS passe les noms en Unicode décomposé (NFD) alors que le téléphone les garde
-//     précomposés (NFC). Sans conversion, tout nom accentué est introuvable.
-//   - MTP n'a pas d'attributs étendus. Ils sont acceptés puis oubliés, car le Finder
-//     abandonne une copie dont il ne peut pas écrire les attributs.
+// macRawFS convertit les noms en NFC, car macOS les passe décomposés et le téléphone les garde
+// précomposés. Il accepte aussi les attributs étendus sans les garder : MTP n'en a pas, et le
+// Finder abandonne une copie s'il ne peut pas les écrire.
 type macRawFS struct {
 	fuse.RawFileSystem
 }

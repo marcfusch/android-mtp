@@ -13,30 +13,23 @@ import (
 	"github.com/hanwen/usb"
 )
 
-// Délais de chaque transfert USB, en millisecondes. À la connexion, court, pour qu'un téléphone
-// verrouillé renvoie une erreur au lieu de bloquer. Une fois connecté, long : un transfert qui
-// expire en plein envoi fige le téléphone jusqu'au débranchement, et le téléphone peut mettre
-// plusieurs secondes à répondre quand il indexe ses médias.
+// Délais USB en millisecondes : court à la connexion pour qu'un téléphone verrouillé échoue vite,
+// long ensuite car un transfert qui expire fige le téléphone jusqu'au débranchement.
 const (
 	connectTimeout = 3000
 	ioTimeout      = 30000
 )
 
-// Taille maximale d'une écriture FUSE, le plafond de macOS. Chaque écriture coûte un échange
-// MTP complet : 128 Kio par défaut, c'est 8 fois plus d'échanges.
 const maxWrite = 1 << 20
 
 var errLocked = errors.New("le téléphone ne répond pas, déverrouille le")
 
-// phone est un téléphone monté : la session MTP et le serveur FUSE qui la sert.
 type phone struct {
 	dev    *mtp.Device
 	server *fuse.Server
 	done   chan struct{}
 }
 
-// mountPhone ouvre la session MTP et monte le téléphone dans dir. Configure ferme une session
-// restée ouverte et réinitialise l'USB si l'ouverture échoue.
 func mountPhone(ctx *usb.Context, dir string) (*phone, error) {
 	devs, err := mtp.FindDevices(ctx)
 	if err != nil {
@@ -49,6 +42,7 @@ func mountPhone(ctx *usb.Context, dir string) (*phone, error) {
 		d.Done()
 	}
 	dev := devs[0]
+	debug := os.Getenv("ANDROID_MTP_DEBUG") != ""
 	fail := func(err error) (*phone, error) {
 		dev.Close()
 		dev.Done()
@@ -56,7 +50,7 @@ func mountPhone(ctx *usb.Context, dir string) (*phone, error) {
 	}
 
 	dev.Timeout = connectTimeout
-	dev.MTPDebug = os.Getenv("ANDROID_MTP_DEBUG") != ""
+	dev.MTPDebug = debug
 	if err := dev.Configure(); err != nil {
 		return fail(fmt.Errorf("%w (%v)", errLocked, err))
 	}
@@ -81,7 +75,7 @@ func mountPhone(ctx *usb.Context, dir string) (*phone, error) {
 		MountOptions: fuse.MountOptions{
 			SingleThreaded: true,
 			MaxWrite:       maxWrite,
-			Debug:          os.Getenv("ANDROID_MTP_DEBUG") != "",
+			Debug:          debug,
 			FsName:         "android",
 			Name:           "mtp",
 			Options:        []string{"volname=Android", "local", "noappledouble"},
@@ -108,7 +102,6 @@ func mountPhone(ctx *usb.Context, dir string) (*phone, error) {
 	return p, nil
 }
 
-// ejected dit si le montage a disparu sans que l'agent l'ait démonté : éjection Finder ou android off.
 func (p *phone) ejected() bool {
 	select {
 	case <-p.done:
@@ -118,7 +111,6 @@ func (p *phone) ejected() bool {
 	}
 }
 
-// unmount démonte, de force si le montage est occupé, puis ferme la session MTP.
 func (p *phone) unmount(dir string) {
 	if p.server.Unmount() != nil {
 		forceUnmount(dir)
@@ -130,7 +122,6 @@ func (p *phone) unmount(dir string) {
 	p.release()
 }
 
-// release ferme la session MTP une fois le serveur FUSE arrêté.
 func (p *phone) release() {
 	p.dev.Close()
 	p.dev.Done()

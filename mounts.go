@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// isMounted lit la table des montages sans toucher au système de fichiers, qui peut ne plus répondre.
+// isMounted ne touche pas au montage, qui peut ne plus répondre.
 func isMounted(dir string) bool {
 	out, _ := exec.Command("mount").Output()
 	return mountedIn(string(out), dir)

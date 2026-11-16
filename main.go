@@ -51,7 +51,6 @@ func main() {
 	}
 }
 
-// open demande à l'agent de remonter le téléphone s'il le faut, puis ouvre le Finder.
 func open(dir string) error {
 	if !isMounted(dir) {
 		if readUSB().iface == "" {

@@ -14,63 +14,7 @@ import (
 	"github.com/hanwen/usb"
 )
 
-type action int
-
-const (
-	none action = iota
-	mount
-	unmount
-	release
-)
-
-// tracker décide quoi faire à chaque tour de watch. Il ne touche à rien, pour être testé seul.
-type tracker struct {
-	mounted string // interface montée
-	ejected string // interface éjectée par l'utilisateur, remontée au prochain branchement seulement
-	warned  string // interface pour laquelle l'utilisateur a déjà été prévenu d'un échec
-}
-
-func (t *tracker) next(iface string, userEjected bool) action {
-	if t.mounted != "" {
-		switch {
-		case userEjected:
-			t.ejected, t.mounted = t.mounted, ""
-			return release
-		case iface != t.mounted:
-			t.mounted = ""
-			return unmount
-		}
-		return none
-	}
-	switch iface {
-	case "":
-		t.ejected, t.warned = "", ""
-		return none
-	case t.ejected:
-		return none
-	}
-	return mount
-}
-
-func (t *tracker) mountSucceeded(iface string) {
-	t.mounted, t.warned = iface, ""
-}
-
-// mountFailed renvoie true au premier échec sur une interface, pour ne prévenir qu'une fois.
-func (t *tracker) mountFailed(iface string) bool {
-	if t.warned == iface {
-		return false
-	}
-	t.warned = iface
-	return true
-}
-
-func (t *tracker) remount() {
-	t.ejected = ""
-}
-
-// watch monte le téléphone à chaque branchement et le démonte au débranchement. SIGUSR1 remonte
-// un téléphone éjecté ; SIGTERM, envoyé par launchd, démonte et ferme la session avant de quitter.
+// watch est la boucle de l'agent. SIGUSR1 remonte un téléphone éjecté, SIGTERM démonte et quitte.
 func watch(dir string) {
 	ctx := usb.NewContext()
 	remount := make(chan os.Signal, 1)
@@ -139,8 +83,7 @@ func failureMessage(err error, killed bool) string {
 	return err.Error()
 }
 
-// notify affiche une notification sans attendre : osascript peut ne jamais rendre la main, et la
-// boucle de watch ne doit pas l'attendre.
+// notify n'attend pas osascript, qui peut ne jamais rendre la main.
 func notify(msg string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

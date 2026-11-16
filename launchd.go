@@ -39,7 +39,6 @@ var plistTmpl = template.Must(template.New("plist").Funcs(template.FuncMap{"xml"
 </plist>
 `))
 
-// agent décrit l'agent launchd et l'emplacement de ses fichiers.
 type agent struct {
 	Label, Bin, Log, Plist string
 }
@@ -61,8 +60,7 @@ func (a agent) plist() []byte {
 	return b.Bytes()
 }
 
-// install copie le binaire courant hors de ~/Documents, que macOS interdit à launchd de lire,
-// puis charge l'agent.
+// install copie le binaire hors de ~/Documents, que launchd n'a pas le droit de lire.
 func install(home string) error {
 	a := newAgent(home)
 	self, err := os.Executable()
@@ -73,7 +71,7 @@ func install(home string) error {
 		return err
 	}
 
-	stopAgent(a.Label)
+	stopAgent()
 	if self != a.Bin {
 		if err := copyExecutable(self, a.Bin); err != nil {
 			return err
@@ -98,7 +96,7 @@ func install(home string) error {
 
 func uninstall(home, dir string) error {
 	a := newAgent(home)
-	stopAgent(a.Label)
+	stopAgent()
 	if isMounted(dir) {
 		forceUnmount(dir)
 	}
@@ -112,20 +110,18 @@ func uninstall(home, dir string) error {
 	return nil
 }
 
-// signalAgent demande à l'agent de remonter un téléphone éjecté.
 func signalAgent() error {
-	return launchctl("kill", "SIGUSR1", domain()+"/"+label)
+	return launchctl("kill", "SIGUSR1", target())
 }
 
-// stopAgent décharge l'agent et attend qu'il ait quitté : bootout rend la main avant, pendant
-// que l'agent démonte et ferme la session, et un bootstrap lancé entre temps est refusé.
-func stopAgent(label string) {
-	target := domain() + "/" + label
-	if launchctl("bootout", target) != nil {
+// stopAgent attend que l'agent ait quitté : bootout rend la main avant, et un bootstrap lancé
+// entre temps est refusé.
+func stopAgent() {
+	if launchctl("bootout", target()) != nil {
 		return
 	}
 	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
-		if launchctl("print", target) != nil {
+		if launchctl("print", target()) != nil {
 			return
 		}
 	}
@@ -135,6 +131,10 @@ func domain() string {
 	return fmt.Sprintf("gui/%d", os.Getuid())
 }
 
+func target() string {
+	return domain() + "/" + label
+}
+
 func launchctl(args ...string) error {
 	if out, err := exec.Command("launchctl", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("launchctl %s: %v %s", args[0], err, bytes.TrimSpace(out))
@@ -142,7 +142,7 @@ func launchctl(args ...string) error {
 	return nil
 }
 
-// copyExecutable écrit à côté puis renomme, pour remplacer sans risque un binaire en cours d'exécution.
+// copyExecutable passe par un renommage pour remplacer un binaire en cours d'exécution.
 func copyExecutable(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {

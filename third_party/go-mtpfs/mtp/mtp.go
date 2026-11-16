@@ -244,9 +244,8 @@ func (d *Device) fetchPacket(dest []byte, header *usbBulkHeader) (rest []byte, e
 	return buf.Bytes(), nil
 }
 
-// earlyResponse reads a response the device sent without reading the data of a transaction,
-// which Android does when it refuses an operation. The device then waits for the next command,
-// so the session stays usable. It returns nil when the device sent nothing.
+// earlyResponse reads the answer Android sends, without reading the data, when it refuses an
+// operation. The session then stays usable. It returns nil if the device sent nothing.
 func (d *Device) earlyResponse(req *Container, rep *Container) error {
 	timeout := d.Timeout
 	d.Timeout = 1000
@@ -506,9 +505,8 @@ func (d *Device) bulkWrite(hdr *usbBulkHeader, r io.Reader, size int64) (n int64
 		}
 	}
 	if lastTransfer%packetSize == 0 {
-		// write a short packet just to be sure. When the transfer filled its last packet, this
-		// packet ends it and the device must read it, so it gets the full timeout. Otherwise
-		// Android leaves it unread, and the full timeout would cost seconds per object.
+		// write a short packet just to be sure. It is only needed when the last packet was full;
+		// otherwise Android never reads it, and waiting the full timeout costs seconds per object.
 		timeout := zlpTimeout
 		if endsOnFullPacket(sent, packetSize) {
 			timeout = d.Timeout

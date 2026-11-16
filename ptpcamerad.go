@@ -8,12 +8,9 @@ import (
 	"time"
 )
 
-// ptpcamerad (Transfert d'images) prend le téléphone au branchement et ne le rend jamais.
-// launchd le relance dès qu'il meurt, même désactivé, mais une copie gelée par SIGSTOP reste en
-// place sans rien prendre.
-
-// freezePtpcamerad gèle ptpcamerad. S'il tient déjà le téléphone, il faut le tuer, ce qui peut
-// figer le téléphone jusqu'au prochain branchement : elle renvoie alors true.
+// freezePtpcamerad gèle ptpcamerad (Transfert d'images), qui prend le téléphone au branchement et
+// ne le rend jamais. launchd le relance s'il meurt, même désactivé ; gelé, il ne prend plus rien.
+// S'il tient déjà le téléphone, il faut le tuer, et le téléphone peut rester figé : killed est vrai.
 func freezePtpcamerad(s usbStatus) (killed bool) {
 	if s.owner == "ptpcamerad" {
 		syscall.Kill(s.ownerPID, syscall.SIGKILL)
