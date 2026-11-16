@@ -244,6 +244,28 @@ func (d *Device) fetchPacket(dest []byte, header *usbBulkHeader) (rest []byte, e
 	return buf.Bytes(), nil
 }
 
+// earlyResponse reads a response the device sent without reading the data of a transaction,
+// which Android does when it refuses an operation. The device then waits for the next command,
+// so the session stays usable. It returns nil when the device sent nothing.
+func (d *Device) earlyResponse(req *Container, rep *Container) error {
+	timeout := d.Timeout
+	d.Timeout = 1000
+	defer func() { d.Timeout = timeout }()
+
+	data := make([]byte, d.fetchMaxPacketSize())
+	h := &usbBulkHeader{}
+	rest, err := d.fetchPacket(data, h)
+	if err != nil {
+		return nil
+	}
+	err = d.decodeRep(h, rest, rep)
+	log.Printf("MTP %s: device answered %s without reading the data", OC_names[int(req.Code)], getName(RC_names, int(rep.Code)))
+	if err == nil {
+		err = SyncError("device answered OK without reading the data")
+	}
+	return err
+}
+
 func (d *Device) decodeRep(h *usbBulkHeader, rest []byte, rep *Container) error {
 	if h.Type != USB_CONTAINER_RESPONSE {
 		return SyncError(fmt.Sprintf("got type %d (%s) in response, want CONTAINER_RESPONSE.", h.Type, USB_names[int(h.Type)]))
@@ -336,6 +358,9 @@ func (d *Device) runTransaction(req *Container, rep *Container,
 
 		_, err := d.bulkWrite(&hdr, src, writeSize)
 		if err != nil {
+			if rerr := d.earlyResponse(req, rep); rerr != nil {
+				return rerr
+			}
 			return err
 		}
 	}

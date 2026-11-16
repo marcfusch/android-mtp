@@ -24,8 +24,8 @@ type androidNode struct {
 	start     time.Time
 	byteCount int64
 
-	// devSize is the size of the object on the device during an edit. Size runs ahead of it
-	// while writes wait in an androidFile buffer.
+	// devSize is the size of the object on the device. Size runs ahead of it while writes
+	// wait in an androidFile buffer, so it is only changed by what reaches the device.
 	devSize int64
 }
 
@@ -36,7 +36,6 @@ func (n *androidNode) startEdit() bool {
 
 	n.start = time.Now()
 	n.byteCount = 0
-	n.devSize = n.Size
 	if err := n.fs.dev.AndroidBeginEditObject(n.Handle()); err != nil {
 		log.Println("AndroidBeginEditObject failed:", err)
 		return false
@@ -112,6 +111,11 @@ type androidFile struct {
 	// pending holds consecutive writes starting at pendingOff, not yet sent to the device.
 	pending    []byte
 	pendingOff int64
+
+	// wrote is set once this handle has written. Only a writer ends the edit on Flush: macOS
+	// opens a file being copied to read it, for thumbnails or Spotlight, and closing that reader
+	// must not end the copy's edit.
+	wrote bool
 }
 
 func (f *androidFile) flushPending() syscall.Errno {
@@ -138,11 +142,13 @@ func (f *androidFile) flushPending() syscall.Errno {
 	if end := f.pendingOff + int64(len(f.pending)); err == nil && end > n.devSize {
 		n.devSize = end
 	}
-	f.pending = f.pending[:0]
 	if err != nil {
-		log.Println("AndroidSendPartialObject failed:", err)
+		log.Printf("AndroidSendPartialObject %q at %d+%d, device size %d, edit open %v: %v",
+			n.obj.Filename, f.pendingOff, len(f.pending), n.devSize, n.write, err)
+		f.pending = f.pending[:0]
 		return syscall.EIO
 	}
+	f.pending = f.pending[:0]
 	return 0
 }
 
@@ -180,6 +186,7 @@ func (f *androidFile) Write(ctx context.Context, dest []byte, off int64) (writte
 	if !f.node.startEdit() {
 		return 0, syscall.EIO
 	}
+	f.wrote = true
 	contiguous := off == f.pendingOff+int64(len(f.pending))
 	if len(f.pending) > 0 && (!contiguous || len(f.pending)+len(dest) > writeBufSize) {
 		if errno := f.flushPending(); errno != 0 {
@@ -205,6 +212,9 @@ func (f *androidFile) Write(ctx context.Context, dest []byte, off int64) (writte
 var _ = (fs.FileFlusher)((*androidFile)(nil))
 
 func (f *androidFile) Flush(ctx context.Context) syscall.Errno {
+	if !f.wrote {
+		return 0
+	}
 	if errno := f.flushPending(); errno != 0 {
 		f.node.endEdit()
 		return errno

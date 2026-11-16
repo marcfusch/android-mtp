@@ -131,7 +131,7 @@ func (fs *deviceFS) newFile(obj mtp.ObjectInfo, size int64, id uint32) (node fs.
 
 	var m *mtpNodeImpl
 	if fs.options.Android {
-		n := &androidNode{}
+		n := &androidNode{devSize: size}
 		m = &n.mtpNodeImpl
 		node = n
 	} else {
